@@ -4,7 +4,9 @@ import org.itmo.fuzzing.lect2.FunctionRunner;
 import org.itmo.fuzzing.lect2.MutationFuzzer;
 
 import java.util.*;
+import java.time.Duration;
 import java.util.function.BiPredicate;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public class AdvancedMutationFuzzer extends MutationFuzzer {
@@ -16,6 +18,7 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
     private int seedIndex;
     private Random random;
     public Set<String> coveragesSeen = new TreeSet<>();
+    private boolean recordInputs = true;
 
 
     /**
@@ -84,7 +87,9 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
             inp = createCandidate();
         }
 
-        inputs.add(inp);
+        if (recordInputs) {
+            inputs.add(inp);
+        }
         return inp;
     }
 
@@ -121,6 +126,29 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
      */
     public FuzzingResult fuzz(FunctionRunner runner, long trials,
                             BiPredicate<String, Object> stopCondition) {
+        return execute(runner, trials, null, stopCondition, 0, progress -> {});
+    }
+
+    /**
+     * Runs until the condition matches or the time budget expires. Time is checked before
+     * each execution; a running target is not interrupted. Progress is reported synchronously
+     * after every {@code reportEvery} executions, and its cost counts towards the budget.
+     * Zero time executes nothing. This invocation does not reset the fuzzer.
+     */
+    public FuzzingResult fuzz(FunctionRunner runner, Duration timeBudget,
+                             BiPredicate<String, Object> stopCondition,
+                             long reportEvery, Consumer<FuzzingProgress> observer) {
+        Objects.requireNonNull(timeBudget, "timeBudget");
+        if (timeBudget.isNegative() || reportEvery <= 0) {
+            throw new IllegalArgumentException("timeBudget must be non-negative and reportEvery positive");
+        }
+        return execute(runner, Long.MAX_VALUE, timeBudget.toNanos(), stopCondition,
+                reportEvery, Objects.requireNonNull(observer, "observer"));
+    }
+
+    private FuzzingResult execute(FunctionRunner runner, long trials, Long timeBudgetNanos,
+                                 BiPredicate<String, Object> stopCondition,
+                                 long reportEvery, Consumer<FuzzingProgress> observer) {
         Objects.requireNonNull(runner, "runner");
         Objects.requireNonNull(stopCondition, "stopCondition");
         if (trials < 0) {
@@ -129,14 +157,25 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
 
         String input = null;
         Object result = null;
+        long startedAt = System.nanoTime();
+        long executions = 0;
         for (long i = 0; i < trials; i++) {
+            if (timeBudgetNanos != null && System.nanoTime() - startedAt >= timeBudgetNanos) {
+                break;
+            }
             input = fuzz();
             result = run(runner, input);
-            if (stopCondition.test(input, result)) {
-                return new FuzzingResult(i + 1, input, result, true);
+            executions++;
+            boolean stopped = stopCondition.test(input, result);
+            if (reportEvery > 0 && executions % reportEvery == 0) {
+                observer.accept(new FuzzingProgress(executions, input, result,
+                        Duration.ofNanos(System.nanoTime() - startedAt)));
+            }
+            if (stopped) {
+                return new FuzzingResult(executions, input, result, true);
             }
         }
-        return new FuzzingResult(trials, input, result, false);
+        return new FuzzingResult(executions, input, result, false);
     }
 
     /**
@@ -145,6 +184,14 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
      */
     public record FuzzingResult(long executions, String input, Object result,
                                 boolean stoppedByCondition) {
+    }
+
+    public record FuzzingProgress(long executions, String input, Object result, Duration elapsed) {
+    }
+
+    /** Disables input history for long runs without affecting corpus admission. */
+    public void setRecordInputs(boolean recordInputs) {
+        this.recordInputs = recordInputs;
     }
 
     // Getters and setters

@@ -6,7 +6,6 @@ import org.itmo.fuzzing.lect3.AdvancedMutationFuzzer;
 import org.itmo.fuzzing.lect3.CountingGreyboxFuzzer;
 import org.itmo.fuzzing.lect3.GreyBoxFuzzer;
 import org.itmo.fuzzing.lect3.PowerSchedule;
-import org.itmo.fuzzing.lect3.Seed;
 
 import java.util.List;
 
@@ -88,6 +87,9 @@ import java.util.List;
  */
 public final class MazeFuzzer {
 
+    private static final int MIN_MUTATIONS = 64;
+    private static final int MAX_MUTATIONS = 128;
+
     private MazeFuzzer() {
     }
 
@@ -95,29 +97,60 @@ public final class MazeFuzzer {
      * Реализуйте здесь конфигурацию и запуск трёх режимов на каркасе из лекции 3, а также вывод
      * сопоставимых результатов эксперимента.
      *
-     * @param args параметры запуска в выбранном вами формате
+     * @param args необязательный бюджет каждого запуска (по умолчанию 10000)
      */
     public static void main(String[] args) {
         long budget = args.length == 0 ? 10_000 : Long.parseLong(args[0]);
-        task1(budget);
-        // TODO: добавить coverage-guided и directed режимы и сравнение экспериментов.
+        var seeds = List.of("D");
+        var mutator = new MazeMutator();
+        task1(budget, seeds, mutator);
+        task2(budget, seeds, mutator);
+        // TODO: добавить directed режим и сравнение повторных экспериментов.
     }
 
     /**
      * Задача 1: dumb black-box фаззинг с остановкой при SOLVED или исчерпании бюджета.
      */
-    private static void task1(long budget) {
+    private static void task1(long budget, List<String> seeds, MazeMutator mutator) {
         var fuzzer = new AdvancedMutationFuzzer(
-                List.of("D"), new MazeMutator(), new PowerSchedule(),
-                64, 128);
+                seeds, mutator, new PowerSchedule(), MIN_MUTATIONS, MAX_MUTATIONS);
+        runExperiment("Task 1 / Dumb black-box", fuzzer, budget);
+    }
+
+    /**
+     * Задача 2: grey-box с равномерной энергией и с приоритетом редких наборов покрытия.
+     */
+    private static void task2(long budget, List<String> seeds, MazeMutator mutator) {
+        var uniformFuzzer = new GreyBoxFuzzer(
+                seeds, mutator, new PowerSchedule(), MIN_MUTATIONS, MAX_MUTATIONS);
+        runExperiment("Task 2 / Grey-box / Uniform energy", uniformFuzzer, budget);
+
+        var rareCoverageFuzzer = new CountingGreyboxFuzzer(
+                seeds, mutator, new AFLFastSchedule(5.0), MIN_MUTATIONS, MAX_MUTATIONS);
+        runExperiment("Task 2 / Grey-box / AFLFast energy", rareCoverageFuzzer, budget);
+    }
+
+    private static void runExperiment(String name, AdvancedMutationFuzzer fuzzer, long budget) {
+        System.out.println("\n" + name);
         var runner = new FunctionRunner(MazeGenerated::maze);
+        long startedAt = System.nanoTime();
 
         var result = fuzzer.fuzz(runner, budget,
-                (input, output) -> output instanceof String text && text.startsWith("SOLVED\n"));
+                (input, output) -> {
+                    if (fuzzer instanceof GreyBoxFuzzer
+                            && runner.coverage.stream().noneMatch(point -> point.startsWith("tile_"))) {
+                        throw new IllegalStateException(
+                                "Grey-box requires maze coverage. Run MazeFuzzer with the coverage javaagent "
+                                        + "(Gradle task runWithAgent).");
+                    }
+                    return output instanceof String text && text.startsWith("SOLVED\n");
+                });
+        double elapsedSeconds = (System.nanoTime() - startedAt) / 1_000_000_000.0;
 
-        System.out.println("Dumb black-box: "
-                + (result.stoppedByCondition() ? "SOLVED" : "BUDGET EXHAUSTED"));
+        System.out.println("Status: " + (result.stoppedByCondition() ? "SOLVED" : "BUDGET EXHAUSTED"));
         System.out.println("Executions: " + result.executions());
+        System.out.printf(java.util.Locale.ROOT, "Time: %.3f s%n", elapsedSeconds);
+        System.out.println("Corpus size: " + fuzzer.population.size());
         if (result.stoppedByCondition()) {
             System.out.println("Input: " + result.input());
             System.out.println(result.result());

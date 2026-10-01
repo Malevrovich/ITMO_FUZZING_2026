@@ -42,6 +42,8 @@ tasks.register<JavaExec>("runWithAgent") {
     classpath = sourceSets.main.get().runtimeClasspath
 
     jvmArgumentProviders.add(CommandLineArgumentProvider {
-        listOf("-javaagent:${agentJar.get().archiveFile.get().asFile.absolutePath}")
+        val includes = project.findProperty("agentIncludes") as String?
+        val agentArgs = includes?.let { "=$it" } ?: ""
+        listOf("-javaagent:${agentJar.get().archiveFile.get().asFile.absolutePath}$agentArgs")
     })
 }
