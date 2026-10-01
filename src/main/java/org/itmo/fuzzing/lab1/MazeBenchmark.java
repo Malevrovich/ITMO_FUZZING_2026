@@ -32,19 +32,23 @@ public final class MazeBenchmark {
         for (String arg : args) {
             if (arg.equals("--help")) {
                 System.out.println("MazeBenchmark --fuzzers=black,grey,aflfast --seconds=3600 "
-                        + "--report-every=100000 --seed-length=32 [--random-seed=42]");
+                        + "--report-every=100000 --seed-length=32 [--random-seed=42] [--input-seed=DDRR]");
                 System.out.println("Time limit is per fuzzer. Grey-box modes require the coverage javaagent.");
                 System.out.println("seed-length is the maximum initial route length (chosen randomly in 1..seed-length).");
+                System.out.println("input-seed supplies the route directly and overrides random route generation.");
                 return;
             }
         }
         Options options = Options.parse(args);
-        String inputSeed = randomRoute(options.seedLength(), new Random(options.randomSeed()));
+        String inputSeed = options.inputSeed() != null ? options.inputSeed()
+                : randomRoute(options.seedLength(), new Random(options.randomSeed()));
         var seeds = List.of(inputSeed);
         var mutator = new MazeMutator();
 
-        System.out.printf(Locale.ROOT, "seed=%s random-seed=%d limit=%ds/fuzzer report-every=%d%n",
-                inputSeed, options.randomSeed(), options.seconds(), options.reportEvery());
+        String seedSource = options.inputSeed() != null ? "explicit"
+                : "random-seed=" + options.randomSeed();
+        System.out.printf(Locale.ROOT, "seed=%s source=%s limit=%ds/fuzzer report-every=%d%n",
+                inputSeed, seedSource, options.seconds(), options.reportEvery());
         for (String mode : options.fuzzers()) {
             AdvancedMutationFuzzer fuzzer = switch (mode) {
                 case "black" -> new AdvancedMutationFuzzer(
@@ -72,8 +76,16 @@ public final class MazeBenchmark {
         fuzzer.setRecordInputs(false);
         var runner = new FunctionRunner(MazeGenerated::maze);
         boolean[] coverageChecked = {false};
+        long[] outcomes = new long[2]; // VALID, INVALID; SOLVED учитывается отдельно остановкой.
         long startedAt = System.nanoTime();
         var result = fuzzer.fuzz(runner, Duration.ofSeconds(options.seconds()), (input, output) -> {
+            if (output instanceof String text) {
+                if (text.startsWith("VALID\n")) {
+                    outcomes[0]++;
+                } else if (text.startsWith("INVALID\n")) {
+                    outcomes[1]++;
+                }
+            }
             if (!coverageChecked[0] && fuzzer instanceof GreyBoxFuzzer) {
                 if (runner.coverage.stream().noneMatch(point -> point.startsWith("tile_"))) {
                     throw new IllegalStateException("Grey-box requires maze coverage. "
@@ -83,31 +95,33 @@ public final class MazeBenchmark {
             }
             return output instanceof String text && text.startsWith("SOLVED\n");
         }, options.reportEvery(), progress -> printStatus(mode, "RUNNING", fuzzer,
-                progress.executions(), progress.elapsed().toNanos()));
+                progress.executions(), progress.elapsed().toNanos(), outcomes[0], outcomes[1]));
 
         printStatus(mode, result.stoppedByCondition() ? "SOLVED" : "TIMEOUT", fuzzer,
-                result.executions(), System.nanoTime() - startedAt);
+                result.executions(), System.nanoTime() - startedAt, outcomes[0], outcomes[1]);
         if (result.stoppedByCondition()) {
             System.out.println(mode + " solution=" + result.input());
         }
     }
 
     private static void printStatus(String mode, String status, AdvancedMutationFuzzer fuzzer,
-                                    long executions, long elapsedNanos) {
+                                    long executions, long elapsedNanos, long valid, long invalid) {
         double seconds = elapsedNanos / 1_000_000_000.0;
         double rate = seconds == 0 ? 0 : executions / seconds;
-        System.out.printf(Locale.ROOT, "%s %s executions=%d elapsed=%.2fs rate=%.0f/s corpus=%d coverage=%d%n",
-                mode, status, executions, seconds, rate, fuzzer.population.size(), fuzzer.coveragesSeen.size());
+        System.out.printf(Locale.ROOT, "%s %s executions=%d elapsed=%.2fs rate=%.0f/s corpus=%d coverage=%d valid=%d invalid=%d%n",
+                mode, status, executions, seconds, rate, fuzzer.population.size(), fuzzer.coveragesSeen.size(),
+                valid, invalid);
     }
 
     private record Options(List<String> fuzzers, long seconds, long reportEvery,
-                           int seedLength, long randomSeed) {
+                           int seedLength, long randomSeed, String inputSeed) {
         private static Options parse(String[] args) {
             List<String> fuzzers = List.of("black", "grey", "aflfast");
             long seconds = 3600;
             long reportEvery = 100_000;
-            int seedLength = 32;
+            int seedLength = 16;
             long randomSeed = new Random().nextLong();
+            String inputSeed = null;
             for (String arg : args) {
                 String[] parts = arg.split("=", 2);
                 if (parts.length != 2) {
@@ -131,6 +145,7 @@ public final class MazeBenchmark {
                     case "--report-every" -> reportEvery = Long.parseLong(parts[1]);
                     case "--seed-length" -> seedLength = Integer.parseInt(parts[1]);
                     case "--random-seed" -> randomSeed = Long.parseLong(parts[1]);
+                    case "--input-seed" -> inputSeed = parts[1];
                     default -> throw new IllegalArgumentException("Unknown option: " + parts[0]);
                 }
             }
@@ -139,7 +154,10 @@ public final class MazeBenchmark {
                 throw new IllegalArgumentException("seconds and report-every must be positive; "
                         + "seconds must fit nanoseconds; seed-length must be in 1..64");
             }
-            return new Options(fuzzers, seconds, reportEvery, seedLength, randomSeed);
+            if (inputSeed != null && !inputSeed.matches("[LRUD]{0,64}")) {
+                throw new IllegalArgumentException("input-seed must contain only L/R/U/D and be at most 64 characters");
+            }
+            return new Options(fuzzers, seconds, reportEvery, seedLength, randomSeed, inputSeed);
         }
     }
 }
