@@ -8,6 +8,8 @@ import org.itmo.fuzzing.lect3.GreyBoxFuzzer;
 import org.itmo.fuzzing.lect3.PowerSchedule;
 import org.itmo.fuzzing.lect3.Seed;
 
+import java.util.List;
+
 /**
  * Точка входа первой лабораторной работы: поиск входа, для которого
  * {@link MazeGenerated#maze(String)} возвращает {@code SOLVED}.
@@ -96,7 +98,29 @@ public final class MazeFuzzer {
      * @param args параметры запуска в выбранном вами формате
      */
     public static void main(String[] args) {
-        // TODO: настроить и запустить dumb black-box, coverage-guided и directed режимы.
-        throw new UnsupportedOperationException("Реализуйте фаззеры первой лабораторной работы");
+        long budget = args.length == 0 ? 10_000 : Long.parseLong(args[0]);
+        task1(budget);
+        // TODO: добавить coverage-guided и directed режимы и сравнение экспериментов.
+    }
+
+    /**
+     * Задача 1: dumb black-box фаззинг с остановкой при SOLVED или исчерпании бюджета.
+     */
+    private static void task1(long budget) {
+        var fuzzer = new AdvancedMutationFuzzer(
+                List.of("D"), new MazeMutator(), new PowerSchedule(),
+                64, 128);
+        var runner = new FunctionRunner(MazeGenerated::maze);
+
+        var result = fuzzer.fuzz(runner, budget,
+                (input, output) -> output instanceof String text && text.startsWith("SOLVED\n"));
+
+        System.out.println("Dumb black-box: "
+                + (result.stoppedByCondition() ? "SOLVED" : "BUDGET EXHAUSTED"));
+        System.out.println("Executions: " + result.executions());
+        if (result.stoppedByCondition()) {
+            System.out.println("Input: " + result.input());
+            System.out.println(result.result());
+        }
     }
 }

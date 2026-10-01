@@ -4,6 +4,7 @@ import org.itmo.fuzzing.lect2.FunctionRunner;
 import org.itmo.fuzzing.lect2.MutationFuzzer;
 
 import java.util.*;
+import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 
 public class AdvancedMutationFuzzer extends MutationFuzzer {
@@ -32,6 +33,9 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
             int maxMutations
     ) {
         super(seeds, minMutations, maxMutations);
+        if (minMutations < 0 || maxMutations < minMutations || maxMutations == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Require 0 <= minMutations <= maxMutations < Integer.MAX_VALUE");
+        }
         this.seeds = seeds;
         this.mutator = mutator;
         this.schedule = schedule;
@@ -58,7 +62,7 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
 
         // Stacking: Apply multiple mutations to generate the candidate
         String candidate = seed.getData();
-        int trials = Math.min(candidate.length(), 1 << random.nextInt(5) + 1);
+        int trials = random.nextInt(minMutations, maxMutations + 1);
         for (int i = 0; i < trials; i++) {
             candidate = mutator.mutate(candidate);
         }
@@ -89,6 +93,9 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
         return mutator.mutate(input);
     }
 
+    /**
+     * Runs the target without changing the initial corpus (black-box mode).
+     */
     public Object run(FunctionRunner runner, String input) {
         FunctionRunner.Tuple<Object, String> resultOutcome = runner.run(input);
         var result = resultOutcome.first;
@@ -97,13 +104,47 @@ public class AdvancedMutationFuzzer extends MutationFuzzer {
     }
 
     public void fuzz(FunctionRunner runner, long trials) {
-        for (int i = 0; i < trials; i++) {
-            String input = fuzz();
-            var res = run(runner, input);
-            if (res != null) {
-//                System.out.println("DIFF FOUND");
+        fuzz(runner, trials, (input, result) -> false);
+    }
+
+    /**
+     * Executes at most {@code trials} inputs, stopping when the supplied condition is met.
+     * The condition receives the input and target result after {@link #run} has completed,
+     * including any corpus or coverage updates performed by subclasses. The result may be null
+     * when the target returns null or the runner catches an exception.
+     *
+     * <p>The budget and execution count apply to this invocation; the fuzzer is not reset.
+     * A zero budget executes nothing and returns null input and result.</p>
+     *
+     * @throws IllegalArgumentException if trials is negative
+     * @throws NullPointerException if runner or stopCondition is null
+     */
+    public FuzzingResult fuzz(FunctionRunner runner, long trials,
+                            BiPredicate<String, Object> stopCondition) {
+        Objects.requireNonNull(runner, "runner");
+        Objects.requireNonNull(stopCondition, "stopCondition");
+        if (trials < 0) {
+            throw new IllegalArgumentException("trials must be non-negative");
+        }
+
+        String input = null;
+        Object result = null;
+        for (long i = 0; i < trials; i++) {
+            input = fuzz();
+            result = run(runner, input);
+            if (stopCondition.test(input, result)) {
+                return new FuzzingResult(i + 1, input, result, true);
             }
         }
+        return new FuzzingResult(trials, input, result, false);
+    }
+
+    /**
+     * Last execution and count for one fuzzing invocation. {@code stoppedByCondition} is true
+     * whenever the condition matched, including on the final budgeted execution.
+     */
+    public record FuzzingResult(long executions, String input, Object result,
+                                boolean stoppedByCondition) {
     }
 
     // Getters and setters
