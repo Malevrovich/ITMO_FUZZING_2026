@@ -87,8 +87,10 @@ import java.util.List;
  */
 public final class MazeFuzzer {
 
-    private static final int MIN_MUTATIONS = 64;
-    private static final int MAX_MUTATIONS = 128;
+    static final int BLACK_MIN_MUTATIONS = 1;
+    static final int BLACK_MAX_MUTATIONS = 64;
+    static final int GREY_MIN_MUTATIONS = 1;
+    static final int GREY_MAX_MUTATIONS = 5;
 
     private MazeFuzzer() {
     }
@@ -105,7 +107,8 @@ public final class MazeFuzzer {
         var mutator = new MazeMutator();
         task1(budget, seeds, mutator);
         task2(budget, seeds, mutator);
-        // TODO: добавить directed режим и сравнение повторных экспериментов.
+        task3(budget, seeds, mutator);
+        // TODO: добавить сравнение повторных экспериментов.
     }
 
     /**
@@ -113,7 +116,7 @@ public final class MazeFuzzer {
      */
     private static void task1(long budget, List<String> seeds, MazeMutator mutator) {
         var fuzzer = new AdvancedMutationFuzzer(
-                seeds, mutator, new PowerSchedule(), MIN_MUTATIONS, MAX_MUTATIONS);
+                seeds, mutator, new PowerSchedule(), BLACK_MIN_MUTATIONS, BLACK_MAX_MUTATIONS);
         runExperiment("Task 1 / Dumb black-box", fuzzer, budget);
     }
 
@@ -122,12 +125,18 @@ public final class MazeFuzzer {
      */
     private static void task2(long budget, List<String> seeds, MazeMutator mutator) {
         var uniformFuzzer = new GreyBoxFuzzer(
-                seeds, mutator, new PowerSchedule(), MIN_MUTATIONS, MAX_MUTATIONS);
+                seeds, mutator, new PowerSchedule(), GREY_MIN_MUTATIONS, GREY_MAX_MUTATIONS);
         runExperiment("Task 2 / Grey-box / Uniform energy", uniformFuzzer, budget);
 
         var rareCoverageFuzzer = new CountingGreyboxFuzzer(
-                seeds, mutator, new AFLFastSchedule(5.0), MIN_MUTATIONS, MAX_MUTATIONS);
+                seeds, mutator, new AFLFastSchedule(5.0), GREY_MIN_MUTATIONS, GREY_MAX_MUTATIONS);
         runExperiment("Task 2 / Grey-box / AFLFast energy", rareCoverageFuzzer, budget);
+    }
+
+    /** Задача 3: энергия сида зависит от расстояния по call graph до targetTile(). */
+    private static void task3(long budget, List<String> seeds, MazeMutator mutator) {
+        var fuzzer = MazeDirected.createFuzzer(seeds, mutator, GREY_MIN_MUTATIONS, GREY_MAX_MUTATIONS);
+        runExperiment("Task 3 / Directed grey-box", fuzzer, budget);
     }
 
     private static void runExperiment(String name, AdvancedMutationFuzzer fuzzer, long budget) {

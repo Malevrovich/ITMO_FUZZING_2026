@@ -4,6 +4,7 @@ import org.itmo.fuzzing.lect2.FunctionRunner;
 import org.itmo.fuzzing.lect3.AFLFastSchedule;
 import org.itmo.fuzzing.lect3.AdvancedMutationFuzzer;
 import org.itmo.fuzzing.lect3.CountingGreyboxFuzzer;
+import org.itmo.fuzzing.lect3.DirectedPowerSchedule;
 import org.itmo.fuzzing.lect3.GreyBoxFuzzer;
 import org.itmo.fuzzing.lect3.PowerSchedule;
 
@@ -22,16 +23,13 @@ import java.util.Random;
  * route, not the subsequent random choices made by the fuzzers.</p>
  */
 public final class MazeBenchmark {
-    private static final int MIN_MUTATIONS = 64;
-    private static final int MAX_MUTATIONS = 128;
-
     private MazeBenchmark() {
     }
 
     public static void main(String[] args) {
         for (String arg : args) {
             if (arg.equals("--help")) {
-                System.out.println("MazeBenchmark --fuzzers=black,grey,aflfast --seconds=3600 "
+                System.out.println("MazeBenchmark --fuzzers=black,grey,aflfast,directed --seconds=3600 "
                         + "--report-every=100000 --seed-length=32 [--random-seed=42] [--input-seed=DDRR]");
                 System.out.println("Time limit is per fuzzer. Grey-box modes require the coverage javaagent.");
                 System.out.println("seed-length is the maximum initial route length (chosen randomly in 1..seed-length).");
@@ -52,11 +50,16 @@ public final class MazeBenchmark {
         for (String mode : options.fuzzers()) {
             AdvancedMutationFuzzer fuzzer = switch (mode) {
                 case "black" -> new AdvancedMutationFuzzer(
-                        seeds, mutator, new PowerSchedule(), MIN_MUTATIONS, MAX_MUTATIONS);
+                        seeds, mutator, new PowerSchedule(),
+                        MazeFuzzer.BLACK_MIN_MUTATIONS, MazeFuzzer.BLACK_MAX_MUTATIONS);
                 case "grey" -> new GreyBoxFuzzer(
-                        seeds, mutator, new PowerSchedule(), MIN_MUTATIONS, MAX_MUTATIONS);
+                        seeds, mutator, new PowerSchedule(),
+                        MazeFuzzer.GREY_MIN_MUTATIONS, MazeFuzzer.GREY_MAX_MUTATIONS);
                 case "aflfast" -> new CountingGreyboxFuzzer(
-                        seeds, mutator, new AFLFastSchedule(5.0), MIN_MUTATIONS, MAX_MUTATIONS);
+                        seeds, mutator, new AFLFastSchedule(5.0),
+                        MazeFuzzer.GREY_MIN_MUTATIONS, MazeFuzzer.GREY_MAX_MUTATIONS);
+                case "directed" -> MazeDirected.createFuzzer(seeds, mutator,
+                        MazeFuzzer.GREY_MIN_MUTATIONS, MazeFuzzer.GREY_MAX_MUTATIONS);
                 default -> throw new IllegalArgumentException("Unknown fuzzer: " + mode);
             };
             run(mode, fuzzer, options);
@@ -108,15 +111,23 @@ public final class MazeBenchmark {
                                     long executions, long elapsedNanos, long valid, long invalid) {
         double seconds = elapsedNanos / 1_000_000_000.0;
         double rate = seconds == 0 ? 0 : executions / seconds;
-        System.out.printf(Locale.ROOT, "%s %s executions=%d elapsed=%.2fs rate=%.0f/s corpus=%d coverage=%d valid=%d invalid=%d%n",
+        String distanceStatus = "";
+        if (fuzzer.schedule instanceof DirectedPowerSchedule directed) {
+            // Include the most recently admitted seed, before the next selection happens.
+            directed.assignEnergy(fuzzer.population);
+            double bestDistance = fuzzer.population.stream().mapToDouble(seed -> seed.getDistance())
+                    .min().orElse(Double.POSITIVE_INFINITY);
+            distanceStatus = String.format(Locale.ROOT, " best-distance=%.0f", bestDistance);
+        }
+        System.out.printf(Locale.ROOT, "%s %s executions=%d elapsed=%.2fs rate=%.0f/s corpus=%d coverage=%d valid=%d invalid=%d%s%n",
                 mode, status, executions, seconds, rate, fuzzer.population.size(), fuzzer.coveragesSeen.size(),
-                valid, invalid);
+                valid, invalid, distanceStatus);
     }
 
     private record Options(List<String> fuzzers, long seconds, long reportEvery,
                            int seedLength, long randomSeed, String inputSeed) {
         private static Options parse(String[] args) {
-            List<String> fuzzers = List.of("black", "grey", "aflfast");
+            List<String> fuzzers = List.of("black", "grey", "aflfast", "directed");
             long seconds = 3600;
             long reportEvery = 100_000;
             int seedLength = 16;
@@ -132,7 +143,7 @@ public final class MazeBenchmark {
                         var selected = new ArrayList<String>();
                         for (String mode : parts[1].split(",", -1)) {
                             mode = mode.trim();
-                            if (!List.of("black", "grey", "aflfast").contains(mode)) {
+                            if (!List.of("black", "grey", "aflfast", "directed").contains(mode)) {
                                 throw new IllegalArgumentException("Unknown fuzzer: " + mode);
                             }
                             if (!selected.contains(mode)) {

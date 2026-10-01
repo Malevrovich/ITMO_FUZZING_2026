@@ -82,6 +82,9 @@ public class CoverageAgent {
         ClassVisitor cv = new ClassVisitor(Opcodes.ASM9, cw) {
             @Override
             public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                CallGraphTracker.registerMethod(className, name, descriptor);
+                final String callerName = name;
+                final String callerDescriptor = descriptor;
                 MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
                 return new MethodVisitor(Opcodes.ASM9, mv) {
 
@@ -133,6 +136,8 @@ public class CoverageAgent {
 
                     @Override
                     public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean isInterface) {
+                        CallGraphTracker.registerCall(className, callerName, callerDescriptor,
+                                owner, name, descriptor);
                         instrumentIfNeeded();
                         super.visitMethodInsn(opcode, owner, name, descriptor, isInterface);
                     }
